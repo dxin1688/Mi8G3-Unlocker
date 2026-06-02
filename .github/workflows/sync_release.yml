@@ -1,0 +1,81 @@
+# .github/workflows/sync-release.yml
+name: 自动同步上游 Release
+
+on:
+  schedule:
+    # 每天北京时间凌晨 1:00 执行 (UTC 时间 17:00)
+    - cron: '0 17 * * *'
+  workflow_dispatch:   # 允许手动触发
+
+permissions:
+  contents: write      # 允许推送代码、创建 release/tag
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 获取完整历史，以便检查 tag
+
+      # 1. 获取上游最新版本号 (tag_name)
+      - name: 获取上游最新 Release 版本
+        id: upstream
+        run: |
+          UPSTREAM_API="https://api.github.com/repos/Linuxoid-cn/Mi8G3-Unlocker/releases/latest"
+          LATEST_TAG=$(curl -s $UPSTREAM_API | jq -r '.tag_name' | xargs)
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "上游最新版本: $LATEST_TAG"
+
+      # 2. 检查本地是否已存在同名 tag（核心判断逻辑）
+      - name: 检查本地是否已有该 tag
+        id: check
+        run: |
+          TAG="${{ steps.upstream.outputs.latest_tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "tag_exists=true" >> $GITHUB_OUTPUT
+            echo "本地已存在 tag $TAG，跳过同步"
+          else
+            echo "tag_exists=false" >> $GITHUB_OUTPUT
+            echo "本地不存在 tag $TAG，开始同步"
+          fi
+
+      # 3. 下载上游 Release 的所有 assets（仅当 tag 不存在时）
+      - name: 下载上游 Release Assets
+        if: steps.check.outputs.tag_exists == 'false'
+        run: |
+          mkdir -p downloaded_release
+          cd downloaded_release
+          gh release download --repo Linuxoid-cn/Mi8G3-Unlocker --pattern '*' --clobber
+          echo "下载完成，文件列表："
+          ls -la
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 4. 创建本仓库 Release 并上传附件（仅当 tag 不存在时）
+      - name: 创建 Release 并上传资产
+        if: steps.check.outputs.tag_exists == 'false'
+        run: |
+          UPSTREAM_TAG="${{ steps.upstream.outputs.latest_tag }}"
+
+          # 创建 release，并将 downloaded_release 目录下的所有文件作为附件上传
+          gh release create "$UPSTREAM_TAG" \
+            --title "$UPSTREAM_TAG" \
+            --notes "自动同步自上游 [Linuxoid-cn/Mi8G3-Unlocker](https://github.com/Linuxoid-cn/Mi8G3-Unlocker/releases/tag/$UPSTREAM_TAG)" \
+            --attach "downloaded_release/*" \
+            --target main
+
+          # 可选：在 main 分支中记录版本号（小文件）
+          echo "$UPSTREAM_TAG" > VERSION
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add VERSION
+          git commit -m "chore: 记录已同步版本 $UPSTREAM_TAG" || echo "无变更"
+          git push origin main
+
+          # 清理临时下载目录
+          rm -rf downloaded_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
