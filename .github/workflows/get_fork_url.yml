@@ -28,9 +28,7 @@ jobs:
       # 这里是你原来的 job
       - name: 使用API获取FORK地址（方式一）
         run:
-          # 构建 API URL
           REPO_API_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}"
-          
           # 调用 API 获取上游仓库地址
           UPSTREAM_REPO=$(curl -s -H "Accept: application/vnd.github.v3+json" \
               "$REPO_API_URL" | jq -r '.parent.full_name // ""')
