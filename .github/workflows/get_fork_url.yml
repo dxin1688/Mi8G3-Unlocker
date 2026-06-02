@@ -10,31 +10,43 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 智能获取上游仓库地址(方式二)
+      # 推荐：使用 gh cli（自动使用 GITHUB_TOKEN，更可靠）
+      - name: 获取上游仓库地址（推荐）
         id: get-upstream
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 方法二：使用 gh cli
           UPSTREAM_REPO=$(gh api repos/${GITHUB_REPOSITORY} --jq '.parent.full_name // ""')
-          
           if [[ -z "$UPSTREAM_REPO" ]]; then
-            echo "⚠️ 当前仓库不是 Fork，或无法自动获取上游地址。"
+            echo "⚠️ 当前仓库不是 Fork，或无法获取上游地址"
             echo "upstream_repo=" >> $GITHUB_OUTPUT
           else
-            echo "✅ 成功获取上游仓库: $UPSTREAM_REPO"
+            echo "✅ 上游仓库: $UPSTREAM_REPO"
             echo "upstream_repo=$UPSTREAM_REPO" >> $GITHUB_OUTPUT
           fi
-      # 这里是你原来的 job
-      - name: 使用API获取FORK地址（方式一）
-        run:
+
+      # 可选：使用 curl + jq（修复语法 + 添加 Token 支持）
+      - name: 使用API获取上游地址（备用方法）
+        id: get-upstream-curl
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
           REPO_API_URL="https://api.github.com/repos/${GITHUB_REPOSITORY}"
-          # 调用 API 获取上游仓库地址
           UPSTREAM_REPO=$(curl -s -H "Accept: application/vnd.github.v3+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
               "$REPO_API_URL" | jq -r '.parent.full_name // ""')
           
-          # 输出结果，用于调试
           echo "当前仓库: ${GITHUB_REPOSITORY}"
           echo "上游仓库: ${UPSTREAM_REPO}"
-        
-  
+          echo "upstream_repo_curl=$UPSTREAM_REPO" >> $GITHUB_OUTPUT
+
+      # 演示如何使用获取到的上游地址
+      - name: 使用上游地址（示例）
+        run: |
+          UPSTREAM="${{ steps.get-upstream.outputs.upstream_repo }}"
+          if [[ -n "$UPSTREAM" ]]; then
+            echo "后续操作可使用: $UPSTREAM"
+            # 例如：git remote add upstream https://github.com/$UPSTREAM.git
+          else
+            echo "当前仓库不是 fork，跳过同步逻辑"
+          fi
