@@ -1,0 +1,162 @@
+# .github/workflows/manual-sync-release.yml
+name: 手动同步多个 Tag 的 Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: '要同步的上游 Release Tag，多个用英文逗号分隔 (例如: v6.0.0, v6.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 获取完整历史，以便操作 tag
+
+      # 1. 解析用户输入的多个 tag
+      - name: 解析 tag 列表
+        id: parse
+        run: |
+          RAW_TAGS="${{ github.event.inputs.tags }}"
+          # 将逗号分隔的字符串转为换行分隔，并去除空白字符
+          TAGS=$(echo "$RAW_TAGS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$')
+          echo "tags<<EOF" >> $GITHUB_OUTPUT
+          echo "$TAGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "即将处理的 tag 列表："
+          echo "$TAGS"
+
+      # 2. 使用 matrix 策略并行处理每个 tag（提高效率，且相互独立）
+      # 注意：需要先将 tags 转换为 JSON 数组，以便 matrix 使用
+      - name: 转换为 JSON 数组
+        id: json
+        run: |
+          TAGS="${{ steps.parse.outputs.tags }}"
+          # 将多行字符串转为 JSON 数组
+          JSON_ARRAY=$(echo "$TAGS" | jq -R . | jq -s .)
+          echo "matrix_tags=$JSON_ARRAY" >> $GITHUB_OUTPUT
+
+    outputs:
+      matrix_tags: ${{ steps.json.outputs.matrix_tags }}
+
+  # 每个 tag 的处理任务（矩阵并行）
+  process:
+    needs: sync
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false   # 即使某个 tag 失败，也继续处理其他 tag
+      matrix:
+        tag: ${{ fromJson(needs.sync.outputs.matrix_tags) }}
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 设置当前 tag 变量
+      - name: 设置当前 tag
+        id: current
+        run: |
+          echo "tag=${{ matrix.tag }}" >> $GITHUB_OUTPUT
+          echo "正在处理 tag: ${{ matrix.tag }}"
+
+      # 检查上游该 tag 是否存在
+      - name: 检查上游 Release 是否存在
+        id: check_upstream
+        run: |
+          TAG="${{ steps.current.outputs.tag }}"
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://api.github.com/repos/Linuxoid-cn/Mi8G3-Unlocker/releases/tags/$TAG)
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            echo "upstream_exists=true" >> $GITHUB_OUTPUT
+            echo "上游存在 Release: $TAG"
+          else
+            echo "upstream_exists=false" >> $GITHUB_OUTPUT
+            echo "错误：上游不存在 Release $TAG (HTTP $HTTP_CODE)"
+            exit 1
+          fi
+
+      # 删除本仓库已存在的同名 Release 和 Tag
+      - name: 删除本仓库已存在的同名 Release 和 Tag
+        if: steps.check_upstream.outputs.upstream_exists == 'true'
+        run: |
+          TAG="${{ steps.current.outputs.tag }}"
+          
+          # 删除 release (如果存在)
+          if gh release view "$TAG" &>/dev/null; then
+            echo "删除已存在的 release: $TAG"
+            gh release delete "$TAG" --yes
+          else
+            echo "本仓库不存在 release $TAG"
+          fi
+          
+          # 删除本地 tag (如果存在)
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "删除本地 tag: $TAG"
+            git tag -d "$TAG"
+          fi
+          
+          # 删除远程 tag (如果存在)
+          if git ls-remote --tags origin | grep -q "refs/tags/$TAG$"; then
+            echo "删除远程 tag: $TAG"
+            git push origin :refs/tags/"$TAG"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 下载上游指定 tag 的 Release assets
+      - name: 下载上游 Release Assets
+        if: steps.check_upstream.outputs.upstream_exists == 'true'
+        run: |
+          TAG="${{ steps.current.outputs.tag }}"
+          # 为每个 tag 创建独立的临时目录，避免互相覆盖
+          mkdir -p "downloaded_$TAG"
+          cd "downloaded_$TAG"
+          gh release download "$TAG" --repo Linuxoid-cn/Mi8G3-Unlocker --pattern '*' --clobber
+          echo "下载完成，文件列表："
+          ls -la
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 创建本仓库 Release 并上传资产
+      - name: 创建 Release 并上传资产
+        if: steps.check_upstream.outputs.upstream_exists == 'true'
+        run: |
+          TAG="${{ steps.current.outputs.tag }}"
+          DOWNLOAD_DIR="downloaded_$TAG"
+          
+          # 确保下载目录存在且非空
+          if [ ! -d "$DOWNLOAD_DIR" ] || [ -z "$(ls -A $DOWNLOAD_DIR)" ]; then
+            echo "错误：没有下载到任何文件，退出"
+            exit 1
+          fi
+          
+          # 创建 release，并将所有文件作为附件上传
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "手动同步自上游 [Linuxoid-cn/Mi8G3-Unlocker](https://github.com/Linuxoid-cn/Mi8G3-Unlocker/releases/tag/$TAG)" \
+            --target main \
+            "$DOWNLOAD_DIR"/*
+          
+          # 清理该 tag 的临时目录
+          rm -rf "$DOWNLOAD_DIR"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 可选：记录成功处理的 tag 到日志文件（汇总用）
+      - name: 记录成功
+        if: always()
+        run: |
+          echo "✅ Tag ${{ matrix.tag }} 处理完成（成功或失败见前序步骤）"
