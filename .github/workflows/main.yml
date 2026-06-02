@@ -1,0 +1,27 @@
+name: 监控 Releases 新版本
+
+on:
+  schedule:
+    # cron 表达式: 分 时 日 月 周
+    # 每小时的第0分钟运行一次 (即每小时一次)
+    - cron: '0 * * * *'
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检查仓库的最新 Release
+        id: check_release
+        run: |
+          # 使用 GitHub API 获取最新版本信息
+          LATEST_VERSION=$(curl -s https://api.github.com/repos/Linuxoid-cn/Mi8G3-Unlocker/releases/latest | jq -r '.tag_name')
+          echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+
+      - name: 比较版本并发送通知
+        # 这里需要一个简单的版本比较逻辑，为了避免示例过于复杂，暂时略过
+        # 你可以通过将版本记录在仓库文件中，或者使用 GitHub 的 Cache 功能来保存上次检查的版本。
+        run: |
+          echo "检测到最新版本: ${{ steps.check_release.outputs.latest_version }}"
+          # 在此添加发送通知的命令
+          # 例如，发送到钉钉、飞书、Server酱等通知服务
