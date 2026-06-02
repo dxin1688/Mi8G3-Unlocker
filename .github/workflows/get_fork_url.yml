@@ -1,0 +1,28 @@
+name: 获取fork项目的地址
+on:
+  workflow_dispatch:
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 智能获取上游仓库地址
+        id: get-upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 方法二：使用 gh cli
+          UPSTREAM_REPO=$(gh api repos/${GITHUB_REPOSITORY} --jq '.parent.full_name // ""')
+          
+          if [[ -z "$UPSTREAM_REPO" ]]; then
+            echo "⚠️ 当前仓库不是 Fork，或无法自动获取上游地址。"
+            echo "upstream_repo=" >> $GITHUB_OUTPUT
+          else
+            echo "✅ 成功获取上游仓库: $UPSTREAM_REPO"
+            echo "upstream_repo=$UPSTREAM_REPO" >> $GITHUB_OUTPUT
+          fi
+  
