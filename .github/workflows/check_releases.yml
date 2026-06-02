@@ -1,0 +1,108 @@
+# .github/workflows/sync-release.yml
+name: 自动同步上游 Release
+
+on:
+  schedule:
+    # 每天北京时间凌晨 1:00 执行 (UTC 时间 17:00)
+    - cron: '0 17 * * *'
+  workflow_dispatch:   # 允许手动触发，方便测试
+
+permissions:
+  contents: write      # 授予提交代码的权限
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 检出本仓库 (默认分支 main)
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整历史，便于后续提交
+
+      # 2. 获取上游最新版本号 (tag_name)
+      - name: 获取上游最新 Release 版本
+        id: upstream
+        run: |
+          UPSTREAM_API="https://api.github.com/repos/Linuxoid-cn/Mi8G3-Unlocker/releases/latest"
+          # 提取 tag_name 并去除可能的空白字符
+          LATEST_TAG=$(curl -s $UPSTREAM_API | jq -r '.tag_name' | xargs)
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "上游最新版本: $LATEST_TAG"
+
+      # 3. 获取本仓库的最新 Release 版本 (使用 GitHub CLI)
+      - name: 获取本仓库最新 Release 版本
+        id: local
+        run: |
+          # 获取本仓库最新 release 的 tag_name
+          LOCAL_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
+          echo "local_tag=$LOCAL_TAG" >> $GITHUB_OUTPUT
+          echo "本仓库最新版本: $LOCAL_TAG"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 4. 对比版本，判断是否需要更新
+      - name: 检查版本更新
+        id: check
+        run: |
+          UPSTREAM_TAG="${{ steps.upstream.outputs.latest_tag }}"
+          LOCAL_TAG="${{ steps.local.outputs.local_tag }}"
+          
+          # 如果本地没有 release 或版本号不同，则标记需要更新
+          if [ -z "$LOCAL_TAG" ] || [ "$UPSTREAM_TAG" != "$LOCAL_TAG" ]; then
+            echo "需要更新：上游 $UPSTREAM_TAG，本地 $LOCAL_TAG"
+            echo "need_update=true" >> $GITHUB_OUTPUT
+          else
+            echo "版本一致，无需更新"
+            echo "need_update=false" >> $GITHUB_OUTPUT
+          fi
+
+      # 5. 下载上游 Release 的 assets (如果需要更新)
+      - name: 下载上游 Release Assets
+        if: steps.check.outputs.need_update == 'true'
+        run: |
+          # 创建一个临时目录存放下载的文件
+          mkdir -p downloaded_release
+          cd downloaded_release
+          
+          # 使用 gh CLI 下载最新 release 的所有 assets
+          gh release download --repo Linuxoid-cn/Mi8G3-Unlocker --pattern '*' --clobber
+          echo "下载完成，文件列表："
+          ls -la
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 6. 提交并创建本地 Release (如果需要更新)
+      - name: 提交文件并创建 Release
+        if: steps.check.outputs.need_update == 'true'
+        run: |
+          UPSTREAM_TAG="${{ steps.upstream.outputs.latest_tag }}"
+          
+          # 检查是否已有同名 tag，有则先删除
+          if git rev-parse "$UPSTREAM_TAG" >/dev/null 2>&1; then
+            echo "本地已存在 tag $UPSTREAM_TAG，删除后重建"
+            git tag -d "$UPSTREAM_TAG"
+            git push origin :refs/tags/"$UPSTREAM_TAG"
+          fi
+          
+          # 将下载的文件移动到仓库根目录
+          mv downloaded_release/* .
+          rm -rf downloaded_release
+          
+          # 配置 Git 用户信息
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # 添加所有文件变更并提交
+          git add .
+          git commit -m "chore: 同步上游版本 $UPSTREAM_TAG" || echo "无变更可提交"
+          
+          # 创建 tag 并推送
+          git tag "$UPSTREAM_TAG"
+          git push origin main --tags
+          
+          # 使用 GitHub CLI 创建 release
+          gh release create "$UPSTREAM_TAG" --title "$UPSTREAM_TAG" --notes "自动同步自上游 [Linuxoid-cn/Mi8G3-Unlocker](https://github.com/Linuxoid-cn/Mi8G3-Unlocker/releases/tag/$UPSTREAM_TAG)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
