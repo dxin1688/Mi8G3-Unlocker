@@ -50,7 +50,7 @@ jobs:
           done
           
           # 输出 JSON 数组
-          JSON_TAGS=$(printf '%s\n' "${TAGS[@]}" | jq -R . | jq -s .)
+          JSON_TAGS=$(jq -c -n '$ARGS.positional' --args "${TAGS[@]}")
           echo "tag_list=$JSON_TAGS" >> $GITHUB_OUTPUT
           echo "count=${#TAGS[@]}" >> $GITHUB_OUTPUT
           echo "共发现 ${#TAGS[@]} 个 Release tags"
