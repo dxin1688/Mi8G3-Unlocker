@@ -61,11 +61,12 @@ jobs:
           UPSTREAM_TAG="${{ steps.upstream.outputs.latest_tag }}"
 
           # 创建 release，并将 downloaded_release 目录下的所有文件作为附件上传
+          # 注意：直接使用通配符 downloaded_release/* 作为位置参数
           gh release create "$UPSTREAM_TAG" \
             --title "$UPSTREAM_TAG" \
             --notes "自动同步自上游 [Linuxoid-cn/Mi8G3-Unlocker](https://github.com/Linuxoid-cn/Mi8G3-Unlocker/releases/tag/$UPSTREAM_TAG)" \
-            --attach "downloaded_release/*" \
-            --target main
+            --target main \
+            downloaded_release/*
 
           # 可选：在 main 分支中记录版本号（小文件）
           echo "$UPSTREAM_TAG" > VERSION
