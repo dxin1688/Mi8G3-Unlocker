@@ -1,5 +1,5 @@
 # .github/workflows/sync-release.yml
-name: 自动同步上游 Release
+name: 定时自动同步上游 Release
 
 on:
   schedule:
